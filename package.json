@@ -8,15 +8,24 @@
     "build": "next build",
     "start": "next start",
     "lint": "tsc --noEmit",
-    "test": "node --test src/lib/agents.test.ts"
+    "test": "node --test src/lib/agents.test.ts",
+    "test:e2e": "playwright test",
+    "check": "npm run lint && npm test && npm run build"
   },
   "dependencies": {
+    "@google/genai": "^2.23.0",
+    "mammoth": "^1.12.3",
     "next": "16.3.5",
+    "pg": "^8.23.0",
     "react": "19.1.1",
-    "react-dom": "19.1.1"
+    "react-dom": "19.1.1",
+    "read-excel-file": "^9.3.10",
+    "unpdf": "^1.8.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "typescript": "^5.9.0"

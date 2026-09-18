@@ -1,0 +1,9 @@
+.git
+.git-codex-hold
+.next
+node_modules
+.env*
+!.env.example
+playwright-report
+test-results
+*.log

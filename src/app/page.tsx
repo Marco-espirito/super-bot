@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { agents, type AgentId, type AttachmentInput } from "@/lib/agents";
 
 type Message = {
@@ -19,7 +20,7 @@ const starters = [
   { icon: "⌘", label: "Débloquer mon code", text: "Aide-moi à diagnostiquer une erreur dans mon projet React et propose un correctif testé.", tone: "blue" },
 ];
 
-const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_MESSAGE_LENGTH = 8_000;
 const TEXT_EXTENSIONS = [".csv", ".txt", ".md", ".json"];
 
@@ -34,8 +35,14 @@ function isStoredMessages(value: unknown): value is Message[] {
 async function prepareAttachment(file: File): Promise<AttachmentInput> {
   const extension = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
   const canRead = file.type.startsWith("text/") || TEXT_EXTENSIONS.includes(extension);
-  const content = canRead ? (await file.text()).slice(0, 20_000) : undefined;
-  return { name: file.name, type: file.type, size: file.size, content };
+  if (canRead) return { name: file.name, type: file.type, size: file.size, content: (await file.text()).slice(0, 20_000) };
+
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch("/api/files/extract", { method: "POST", body: formData });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "Impossible d’extraire ce document.");
+  return { name: result.document.name, type: result.document.mimeType, size: result.document.size, content: result.document.text.slice(0, 20_000) };
 }
 
 function Markup({ children }: { children: string }) {
@@ -55,6 +62,8 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState("");
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ name: string; email: string; plan: string } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
@@ -68,6 +77,8 @@ export default function Home() {
         else localStorage.removeItem("superbot-conversation");
       } catch { localStorage.removeItem("superbot-conversation"); }
     }
+    setConversationId(localStorage.getItem("superbot-conversation-id"));
+    fetch("/api/auth/me").then((response) => response.json()).then((result) => setCurrentUser(result.user ?? null)).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -98,6 +109,7 @@ export default function Home() {
     setInput("");
     setLoading(true);
     const attached = file;
+    let pendingAssistantId: string | null = null;
     setFile(null);
 
     try {
@@ -108,21 +120,49 @@ export default function Home() {
         body: JSON.stringify({
           message: text,
           agent: selectedAgent,
+          conversationId,
           attachments: preparedAttachment ? [preparedAttachment] : [],
         }),
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Impossible de contacter SuperBot.");
-      setMessages((current) => [...current, {
-        id: result.id,
-        role: "assistant",
-        content: result.content,
-        agentId: result.routing.agentId,
-        agentName: result.routing.agentName,
-        confidence: result.routing.confidence,
-      }]);
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || "Impossible de contacter SuperBot.");
+      }
+      if (!response.body) throw new Error("Le navigateur ne prend pas en charge le streaming.");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let assistantId = crypto.randomUUID();
+      while (true) {
+        const { done, value: chunk } = await reader.read();
+        buffer += decoder.decode(chunk ?? new Uint8Array(), { stream: !done });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const event = JSON.parse(line);
+          if (event.type === "meta") {
+            assistantId = event.id;
+            pendingAssistantId = assistantId;
+            if (event.conversationId) {
+              setConversationId(event.conversationId);
+              localStorage.setItem("superbot-conversation-id", event.conversationId);
+            }
+            setMessages((current) => [...current, {
+              id: assistantId, role: "assistant", content: "",
+              agentId: event.routing.agentId, agentName: event.routing.agentName, confidence: event.routing.confidence,
+            }]);
+          } else if (event.type === "delta") {
+            setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: item.content + event.delta } : item));
+          } else if (event.type === "error") {
+            throw new Error(event.error || "La génération a échoué.");
+          }
+        }
+        if (done) break;
+      }
     } catch (cause) {
-      setMessages((current) => current.filter((message) => message.id !== userMessage.id));
+      setMessages((current) => current.filter((message) => message.id !== userMessage.id && message.id !== pendingAssistantId));
       setInput(text);
       setFile(attached);
       setError(cause instanceof Error ? cause.message : "Une erreur inattendue est survenue.");
@@ -136,7 +176,7 @@ export default function Home() {
     event.target.value = "";
     if (!selected) return;
     if (selected.size > MAX_FILE_BYTES) {
-      setError("Ce fichier dépasse la limite de 5 Mo.");
+      setError("Ce fichier dépasse la limite de 10 Mo.");
       return;
     }
     setError("");
@@ -160,7 +200,29 @@ export default function Home() {
     setInput("");
     setFile(null);
     localStorage.removeItem("superbot-conversation");
+    localStorage.removeItem("superbot-conversation-id");
+    setConversationId(null);
     setSidebarOpen(false);
+  }
+
+  function exportMarkdown() {
+    const markdown = messages.map((message) => `## ${message.role === "user" ? "Utilisateur" : message.agentName || "SuperBot"}\n\n${message.content}`).join("\n\n---\n\n");
+    const url = URL.createObjectURL(new Blob([`# Conversation SuperBot\n\n${markdown}\n`], { type: "text/markdown;charset=utf-8" }));
+    const link = document.createElement("a"); link.href = url; link.download = `superbot-${new Date().toISOString().slice(0, 10)}.md`; link.click(); URL.revokeObjectURL(url);
+  }
+
+  function exportPdf() {
+    const printable = window.open("", "_blank", "width=900,height=700");
+    if (!printable) { setError("Autorise les fenêtres contextuelles pour exporter en PDF."); return; }
+    printable.opener = null;
+    printable.document.title = "Conversation SuperBot";
+    const style = printable.document.createElement("style"); style.textContent = "body{max-width:760px;margin:40px auto;font:14px/1.65 system-ui;color:#24212c}h1{color:#7147ed}article{margin:24px 0;padding:16px;border:1px solid #ddd;border-radius:10px}h2{font-size:12px;text-transform:uppercase;color:#7147ed}p{white-space:pre-wrap}"; printable.document.head.append(style);
+    const heading = printable.document.createElement("h1"); heading.textContent = "Conversation SuperBot"; printable.document.body.append(heading);
+    for (const message of messages) {
+      const article = printable.document.createElement("article"); const title = printable.document.createElement("h2"); const content = printable.document.createElement("p");
+      title.textContent = message.role === "user" ? "Utilisateur" : message.agentName || "SuperBot"; content.textContent = message.content; article.append(title, content); printable.document.body.append(article);
+    }
+    printable.focus(); window.setTimeout(() => printable.print(), 150);
   }
 
   return (
@@ -171,11 +233,12 @@ export default function Home() {
         <nav>
           <p className="nav-title">ESPACE</p>
           <button className="nav-item active" aria-current="page"><span aria-hidden="true">◫</span> Chat <i>{messages.length ? 1 : 0}</i></button>
-          <button className="nav-item" disabled title="Bientôt disponible"><span aria-hidden="true">✦</span> Mes skills <b>Bientôt</b></button>
-          <button className="nav-item" disabled title="Bientôt disponible"><span aria-hidden="true">◇</span> Fichiers</button>
+          <Link className="nav-item" href="/history"><span aria-hidden="true">◷</span> Historique</Link>
+          <Link className="nav-item" href="/skills"><span aria-hidden="true">✦</span> Mes skills</Link>
+          <Link className="nav-item" href="/files"><span aria-hidden="true">◇</span> Fichiers</Link>
           <p className="nav-title second">OUTILS</p>
-          <button className="nav-item" disabled title="Bientôt disponible"><span aria-hidden="true">⌁</span> Intégrations <b>Bientôt</b></button>
-          <button className="nav-item" disabled title="Bientôt disponible"><span aria-hidden="true">▥</span> Utilisation</button>
+          <Link className="nav-item" href="/integrations"><span aria-hidden="true">⌁</span> Intégrations</Link>
+          <Link className="nav-item" href="/usage"><span aria-hidden="true">▥</span> Utilisation</Link>
         </nav>
         <div className="usage-card">
           <div><span>Messages ce mois</span><strong>12 / 50</strong></div>
@@ -184,7 +247,7 @@ export default function Home() {
           <button disabled title="Bientôt disponible">Passer à Pro <span aria-hidden="true">↗</span></button>
         </div>
         <div className="profile">
-          <span className="avatar">AM</span><div><strong>Arthur M.</strong><small>Plan gratuit</small></div><button disabled aria-label="Options du profil" title="Bientôt disponible">•••</button>
+          <span className="avatar">{currentUser?.name?.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "AM"}</span><div><strong>{currentUser?.name || "Arthur M."}</strong><small>{currentUser ? `Plan ${currentUser.plan}` : "Mode invité"}</small></div><Link href={currentUser ? "/settings" : "/auth"} aria-label={currentUser ? "Paramètres du profil" : "Se connecter"}>•••</Link>
         </div>
       </aside>
       {sidebarOpen && <button aria-label="Fermer le menu" className="backdrop" onClick={() => setSidebarOpen(false)} />}
@@ -214,7 +277,7 @@ export default function Home() {
             </div>
           ) : (
             <div className="messages">
-              <div className="conversation-heading"><p>CONVERSATION ACTIVE</p><h2>Comment puis-je t&apos;aider ?</h2></div>
+              <div className="conversation-heading"><div><p>CONVERSATION ACTIVE</p><h2>Comment puis-je t&apos;aider ?</h2></div><div className="export-actions"><button onClick={exportMarkdown}>Markdown</button><button onClick={exportPdf}>PDF</button></div></div>
               {messages.map((message) => {
                 const agent = agents.find((item) => item.id === message.agentId);
                 return <article className={`message ${message.role}`} key={message.id}>

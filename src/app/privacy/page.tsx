@@ -1,0 +1,5 @@
+import ProductShell from "@/app/components/product-shell";
+
+export default function PrivacyPage() {
+  return <ProductShell eyebrow="CONFIDENTIALITÉ & RGPD" title="Tes données restent sous ton contrôle"><div className="legal-copy"><h2>Données traitées</h2><p>SuperBot traite les messages, documents et préférences nécessaires au service. Les secrets ne sont jamais exposés au navigateur.</p><h2>Conservation</h2><p>Les comptes authentifiés peuvent conserver leur historique dans PostgreSQL. Le mode invité utilise uniquement le stockage local du navigateur.</p><h2>Suppression</h2><p>Depuis les paramètres, un utilisateur connecté peut supprimer définitivement son compte. Les conversations, messages, fichiers, mémoires, candidatures, préférences et sessions associés sont alors supprimés en cascade.</p><h2>Modèles externes</h2><p>Les demandes envoyées au modèle configuré sont soumises aux conditions de ce fournisseur. N’envoie pas de données sensibles avec une offre gratuite destinée aux tests.</p></div></ProductShell>;
+}
