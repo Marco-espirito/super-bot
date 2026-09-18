@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildDemoResponse, routeIntent } from "./agents.ts";
+import { buildDemoResponse, isAgentId, routeIntent } from "./agents.ts";
 
 test("routes a CV request to the career agent", () => {
   const result = routeIntent("Analyse mon CV pour cette offre Data Analyst");
@@ -21,5 +21,25 @@ test("falls back to the general agent", () => {
 });
 
 test("includes attachment awareness in demo response", () => {
-  assert.match(buildDemoResponse("Analyse ceci", "data", true), /fichier joint/);
+  const response = buildDemoResponse("Analyse ceci", "data", [{
+    name: "ventes.csv",
+    type: "text/csv",
+    size: 42,
+    content: "mois,ca,region\njanvier,1200,nord\nfevrier,,sud",
+  }]);
+  assert.match(response, /2 lignes de données/);
+  assert.match(response, /1 valeur manquante/);
+});
+
+test("does not confuse a Data Analyst career request with data analysis", () => {
+  assert.equal(routeIntent("Adapte mon CV à cette offre Data Analyst").agent.id, "career");
+});
+
+test("matches accented French signals", () => {
+  assert.equal(routeIntent("Prépare ma carrière et mes compétences").agent.id, "career");
+});
+
+test("validates agent identifiers", () => {
+  assert.equal(isAgentId("developer"), true);
+  assert.equal(isAgentId("hacker"), false);
 });

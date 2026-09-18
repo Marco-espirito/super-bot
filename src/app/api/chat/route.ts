@@ -1,13 +1,31 @@
 import { NextResponse } from "next/server";
-import { buildDemoResponse, routeIntent, type AgentId } from "@/lib/agents";
+import { buildDemoResponse, getAgent, isAgentId, routeIntent, type AgentId, type AttachmentInput } from "@/lib/agents";
 
 type ChatBody = {
   message?: string;
   agent?: AgentId | "auto";
-  attachments?: { name: string; type: string; size: number }[];
+  attachments?: AttachmentInput[];
 };
 
+const MAX_REQUEST_BYTES = 100_000;
+const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_CONTENT_LENGTH = 20_000;
+
+function isAttachment(value: unknown): value is AttachmentInput {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.name === "string" && item.name.length > 0 && item.name.length <= 180
+    && typeof item.type === "string" && item.type.length <= 120
+    && typeof item.size === "number" && Number.isFinite(item.size) && item.size >= 0 && item.size <= MAX_FILE_BYTES
+    && (item.content === undefined || (typeof item.content === "string" && item.content.length <= MAX_CONTENT_LENGTH));
+}
+
 export async function POST(request: Request) {
+  const contentLength = Number(request.headers.get("content-length") ?? 0);
+  if (contentLength > MAX_REQUEST_BYTES) {
+    return NextResponse.json({ error: "La requête dépasse la limite autorisée." }, { status: 413 });
+  }
+
   let body: ChatBody;
   try {
     body = await request.json();
@@ -22,24 +40,28 @@ export async function POST(request: Request) {
   if (message.length > 8_000) {
     return NextResponse.json({ error: "Le message dépasse la limite de 8 000 caractères." }, { status: 413 });
   }
+  if (body.agent !== undefined && body.agent !== "auto" && !isAgentId(body.agent)) {
+    return NextResponse.json({ error: "L’agent demandé n’existe pas." }, { status: 400 });
+  }
+  if (body.attachments !== undefined && (!Array.isArray(body.attachments) || body.attachments.length > 3 || !body.attachments.every(isAttachment))) {
+    return NextResponse.json({ error: "La pièce jointe est invalide ou trop volumineuse." }, { status: 400 });
+  }
 
-  const routing = routeIntent(message);
-  const selected = body.agent && body.agent !== "auto"
-    ? { ...routing, agent: { ...routing.agent, id: body.agent } }
-    : routing;
-  const agentId = selected.agent.id as AgentId;
+  const automaticRouting = routeIntent(`${message} ${(body.attachments ?? []).map((item) => item.name).join(" ")}`);
+  const isManual = body.agent !== undefined && body.agent !== "auto";
+  const agentId: AgentId = isManual ? body.agent as AgentId : automaticRouting.agent.id;
+  const selectedAgent = getAgent(agentId);
 
   return NextResponse.json({
     id: crypto.randomUUID(),
-    content: buildDemoResponse(message, agentId, Boolean(body.attachments?.length)),
+    content: buildDemoResponse(message, agentId, body.attachments ?? []),
     routing: {
       agentId,
-      agentName: routing.agent.id === agentId
-        ? routing.agent.name
-        : agentId.charAt(0).toUpperCase() + agentId.slice(1),
-      confidence: routing.confidence,
-      reasons: routing.reasons,
+      agentName: selectedAgent.name,
+      confidence: isManual ? 1 : automaticRouting.confidence,
+      reasons: isManual ? ["sélection manuelle"] : automaticRouting.reasons,
+      mode: isManual ? "manual" : "automatic",
     },
     createdAt: new Date().toISOString(),
-  });
+  }, { headers: { "Cache-Control": "no-store" } });
 }

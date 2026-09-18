@@ -8,9 +8,12 @@
 - Routage automatique entre les agents General, Career, Data et Developer
 - Sélection manuelle d’un agent pour garder le contrôle
 - Ajout de fichiers avec validation du contexte côté API
+- Analyse locale des CSV et fichiers texte (structure, colonnes, valeurs manquantes)
 - Indicateur de confiance et explication du routage
 - États de chargement, erreurs, conversation réinitialisable et design mobile
-- API typée, garde-fous de validation et tests unitaires du routeur
+- API typée, limites de taille, en-têtes de sécurité et validation stricte des entrées
+- Navigation clavier, annonces accessibles et respect de la réduction des animations
+- Tests unitaires du routeur et des analyses de fichiers
 - Mode démo local sans clé API
 
 ## Démarrage
