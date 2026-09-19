@@ -10,7 +10,8 @@
     "lint": "tsc --noEmit",
     "test": "node --test src/lib/agents.test.ts",
     "test:e2e": "playwright test",
-    "check": "npm run lint && npm test && npm run build"
+    "check": "npm run lint && npm test && npm run build",
+    "db:migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.23.0",
